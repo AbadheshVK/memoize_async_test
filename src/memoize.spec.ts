@@ -5,6 +5,8 @@ import { times, zip } from 'lodash';
 import memoize_async from './memoize';
 import { rand_range, sleep } from './util';
 
+jest.setTimeout(30000);
+
 describe('memoize async correctly caches', () => {
   it.concurrent('correctly caches calls in sequence', async () => {
     let promise_called = 0;

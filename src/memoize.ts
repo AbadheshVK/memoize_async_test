@@ -38,14 +38,75 @@ const memoize_async = <R, U extends SimpleArgs>(
   options: { ttl: number; size: number },
   f: BasicAsyncFunc<U, R>,
 ): Memoized<U, R> => {
-  return Object.assign(f, {
-    cache_size: () => {
-      // cache_size is unimplemented
-      return 0;
-    },
-    clear_cache: () => {
-      // clear_cache is not implemented
-    },
+  const cache: Map<string, { value: ReadonlyDeep<R>; expiry: Date }> = new Map();
+  const queue: Map<string, Array<{ resolve: (result: ReadonlyDeep<R>) => void; reject: (reason?: Error) => void }>> = new Map();
+  const maxSize = options.size;
+
+  async function memoized(...args: U): Promise<ReadonlyDeep<R>> {
+
+    //Validate arguments
+    if (f.length !== args.length) {
+      return Promise.reject(
+        new Error(`Invalid number of arguments passed (${args.length} != ${f.length}) or used spread operator`),
+      );
+    }
+
+    const key = JSON.stringify(args);
+
+    //Check and return value from cache if it is not expired based on ttl
+    const entry = cache.get(key);
+    if (entry && entry.expiry > new Date()) {
+      return entry.value;
+    }
+
+    //Enqueue parallel calls if key is present in queue
+    if (queue.has(key)) {
+      return new Promise((resolve, reject) => {
+        queue.get(key)?.push({ resolve, reject });
+      });
+    }
+
+    queue.set(key, []);
+
+    try {
+      const result: ReadonlyDeep<R> = await f(...args);
+      // Remove oldest key if cache is full
+      if (cache.size >= maxSize) {
+        const oldestKey = cache.keys().next().value;
+        cache.delete(oldestKey);
+      }
+
+      const expiry = new Date();
+      expiry.setSeconds(expiry.getSeconds() + options.ttl);
+
+      cache.set(key, { value: result, expiry });
+
+      //Resolve remaining enqueued parallel calls for the key
+      const handlers = queue.get(key);
+      queue.delete(key); // Delete the entry from queue
+      if (handlers) {
+        for (const { resolve } of handlers) {
+          resolve(result);
+        }
+      }
+
+      return result;
+    } catch (err) {
+      //In case of error reject all enqueued parrallel calls
+      const handlers = queue.get(key);
+      queue.delete(key);
+      if (handlers) {
+        for (const { reject } of handlers) {
+          reject(err as Error);
+        }
+      }
+      throw err;
+    }
+  }
+
+  return Object.assign(memoized, {
+    cache_size: () => cache.size,
+    clear_cache: () => cache.clear(),
   });
 };
 
